@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">🌟 GOLBERT VPS PREMIUM - PANEL V5.0 LTS 🌟</h1>
+  <h1 align="center">🌟 kenox VPS PREMIUM - PANEL V5.0 LTS 🌟</h1>
 </p>
 
 <p align="center">
@@ -26,17 +26,8 @@
 
 ---
 
-📞 Soporte, Licencias y Adquisición
-¿Deseas adquirir la versión completa, soporte técnico personalizado o licencias comerciales para tu negocio de venta de internet? Contáctanos directamente:
-📱 Telegram Oficial: @golbert_service
-💳 Métodos de Pago Aceptados:
-🌐 PayPal (Pagos internacionales seguros)
-🇵🇪 Yape (Exclusivo para Perú)
-<p align="center"><i>Desarrollado con 💙 por Golbert VPS — Todos los derechos reservados.</i></p>
-
-
 ## 📥 Instalación Rápida
 Ejecuta el siguiente comando en tu terminal como usuario **root** en una VPS limpia con Ubuntu (22.04, 24.04 o 26.04 LTS):
 
 ```bash
-apt update && apt install -y curl && wget -qO /usr/local/bin/menu "[https://raw.githubusercontent.com/golbert19/vps-script/main/menu.sh](https://raw.githubusercontent.com/golbert19/vps-script/main/menu.sh)" && chmod +x /usr/local/bin/menu && menu
+apt update && apt install -y curl && wget -qO /usr/local/bin/menu "[https://raw.githubusercontent.com/kevinaldaircama/kenox/main/menu.sh](https://raw.githubusercontent.com/kevinaldaircama/kenox/main/menu.sh)" && chmod +x /usr/local/bin/menu && menu
