@@ -1,119 +1,157 @@
-#!/bin/bash
-# ==========================================
-# Instalador Principal - UI Premium + AutoStart + Core Fix + Key Auth
-# ==========================================
+#!/usr/bin/env bash
+# ==========================================================
+# KEVINTECH / KENOX - INSTALADOR PRINCIPAL
+# UI Premium + AutoStart + Core + validación de licencia por API
+# Ubuntu / Debian
+# ==========================================================
+
+set -Eeuo pipefail
+
 C_RED='\033[1;31m'
 C_GREEN='\033[1;32m'
 C_CYAN='\033[1;36m'
 C_ORANGE='\033[38;5;214m'
 C_NC='\033[0m'
 
-# --- INSTALACIÓN DE DEPENDENCIAS CRÍTICAS PARA LA API ---
+log()  { echo -e "${C_GREEN}[OK]${C_NC} $*"; }
+warn() { echo -e "${C_ORANGE}[!]${C_NC} $*"; }
+die()  { echo -e "${C_RED}[ERROR]${C_NC} $*" >&2; exit 1; }
+
+[[ "${EUID}" -eq 0 ]] || die "Ejecuta como root: sudo bash install.sh"
+command -v apt-get >/dev/null 2>&1 || die "Este instalador requiere Ubuntu o Debian."
+
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y > /dev/null 2>&1
-apt-get install -y curl wget > /dev/null 2>&1
 
-clear
+# -------- CONFIGURACIÓN --------
+BOT_API="https://api.kevintechtutorials.site/"
+REPO_URL="https://raw.githubusercontent.com/kevinaldaircama/kenox/main"
+INSTALL_DIR="/etc/vps-manager"
+CORE_DIR="${INSTALL_DIR}/core"
+MENU_PATH="/usr/local/bin/menu"
+
+clear || true
 echo -e "${C_CYAN}================================================${C_NC}"
-echo -e "${C_ORANGE}       INGRESE SU KEY DE INSTALACIÓN            ${C_NC}"
+echo -e "${C_ORANGE}       KEVINTECH - KEY DE INSTALACIÓN           ${C_NC}"
 echo -e "${C_CYAN}================================================${C_NC}"
-read -p "🔑 KEY: " USER_KEY
 
-# --- VALIDACIÓN DE KEY ---
-VPS_IP=$(curl -s ipv4.icanhazip.com)
+read -r -p "🔑 Ingresa tu KEY: " USER_KEY
+[[ -n "${USER_KEY//[[:space:]]/}" ]] || die "No ingresaste una key."
 
-# API del Bot Maestro
-BOT_API="https://api.kevintechtutorials.site
+# IP pública IPv4 del servidor
+VPS_IP="$(curl -4fsS --connect-timeout 8 --max-time 15 https://ipv4.icanhazip.com | tr -d '[:space:]')" \
+  || die "No se pudo detectar la IP pública."
+[[ -n "$VPS_IP" ]] || die "La IP pública llegó vacía."
 
-echo -e "\n⏳ Validando Key con el Servidor Principal..."
-VALIDATION=$(curl -s "$BOT_API?key=$USER_KEY&ip=$VPS_IP")
+echo
+echo "Validando la key con la API: ${BOT_API}"
 
-# Validación robusta (ignora espacios en la respuesta JSON)
-if echo "$VALIDATION" | grep -q "valid" && ! echo "$VALIDATION" | grep -q "invalid"; then
-    echo -e "${C_GREEN}✅ Key Aceptada. Iniciando instalación...${C_NC}"
-    sleep 2
+# Se envían parámetros URL-encoded y se comprueba HTTP + respuesta.
+# Respuestas aceptadas:
+#   {"status":"valid"}  o  {"valid":true}
+# Respuestas como {"status":"invalid"} o {"valid":false} se rechazan.
+API_RESPONSE="$(curl -4fsS --connect-timeout 8 --max-time 20 \
+  --get "$BOT_API" \
+  --data-urlencode "key=${USER_KEY}" \
+  --data-urlencode "ip=${VPS_IP}")" \
+  || die "La API no respondió correctamente. Verifica DNS, SSL y que el servicio API esté activo."
+
+if printf '%s' "$API_RESPONSE" | grep -Eiq '"status"[[:space:]]*:[[:space:]]*"valid"|"valid"[[:space:]]*:[[:space:]]*true'; then
+    log "Key aceptada. Continuando con la instalación."
 else
-    echo -e "${C_RED}❌ KEY INVÁLIDA O YA FUE USADA.${C_NC}"
-    echo -e "Adquiere una nueva key contactando a Kevin tech tutorials"
-    exit 1
+    echo -e "${C_RED}Respuesta de la API:${C_NC} ${API_RESPONSE:0:500}"
+    die "KEY inválida, vencida, usada o no autorizada para esta IP."
 fi
 
-os_name=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2 | awk '{print $1, $2}')
-cpu_info=$(grep "vendor_id" /proc/cpuinfo | head -1 | awk -F': ' '{print $2}')
-ip_addr=$(curl -sS ifconfig.me 2>/dev/null || wget -qO- ipv4.icanhazip.com)
-date_time=$(date +"%d/%m/%Y & TIME : %H:%M")
-arch=$(uname -m)
+# -------- INFORMACIÓN DEL SISTEMA --------
+os_name="$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-Linux}")"
+cpu_info="$(awk -F': ' '/vendor_id/ {print $2; exit}' /proc/cpuinfo 2>/dev/null || true)"
+ip_addr="$VPS_IP"
+arch="$(uname -m)"
 
-clear
+clear || true
 echo -e "${C_ORANGE}======================================================${C_NC}"
-echo -e "             [ ! ] ESPERE UN MOMENTO [ ! ]"
+echo -e "             PREPARANDO INSTALACIÓN"
 echo -e "${C_ORANGE}======================================================${C_NC}"
-echo -e " ${C_RED}SISTEMA:${C_NC} $os_name          ${C_RED}CPU:${C_NC} $cpu_info"
+echo -e " ${C_RED}SISTEMA:${C_NC} ${os_name}"
+echo -e " ${C_RED}CPU:${C_NC} ${cpu_info:-No detectada}"
+echo -e " ${C_RED}IP:${C_NC} ${ip_addr}"
+echo -e " ${C_RED}ARQUITECTURA:${C_NC} ${arch}"
 echo -e "${C_ORANGE}======================================================${C_NC}"
-sleep 1
 
-# Paquetes base
-paquetes=(
-    "bsdmainutils" "sudo" "cron" "usermod" "screen" "nginx" 
-    "nload" "htop" "python3" "python3-pip" 
-    "nodejs" "npm" "lsof" "psmisc" "socat" "bc" "netcat-openbsd" "net-tools" "dos2unix"
+# -------- DEPENDENCIAS --------
+apt-get update
+PACKAGES=(
+  ca-certificates curl wget sudo cron screen nginx nload htop
+  python3 python3-pip nodejs npm lsof psmisc socat bc
+  netcat-openbsd net-tools dos2unix
 )
+apt-get install -y "${PACKAGES[@]}"
+log "Dependencias instaladas."
 
-for pkg in "${paquetes[@]}"; do
-    apt-get install -y "$pkg" > /dev/null 2>&1
-    echo -e " - [ ${C_GREEN}✅${C_NC} ] INSTALACIÓN CORRECTA ${pkg}"
-done
+# -------- NGINX --------
+systemctl unmask nginx >/dev/null 2>&1 || true
+rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-available/default
+systemctl enable nginx
+systemctl restart nginx
+log "Nginx habilitado y reiniciado."
 
-# --- ACTIVACIÓN Y LIMPIEZA DE NGINX POR DEFECTO ---
-systemctl unmask nginx > /dev/null 2>&1
-rm -f /etc/nginx/sites-enabled/default
-rm -f /etc/nginx/sites-available/default
-systemctl enable nginx > /dev/null 2>&1
-systemctl restart nginx > /dev/null 2>&1
-echo -e " - [ ${C_GREEN}✅${C_NC} ] SERVICIO NGINX ACTIVADO Y LIMPIO (ON)"
+# -------- DESCARGA DE ARCHIVOS --------
+mkdir -p "$CORE_DIR"
 
-# --- DESCARGA DE ARCHIVOS SINCRONIZADA ---
-echo -e "\n${C_ORANGE}======================================================${C_NC}"
-echo -e "${C_GREEN}Descargando panel y módulos sincronizados...${C_NC}"
-mkdir -p /etc/vps-manager/core
+download_file() {
+  local remote="$1"
+  local destination="$2"
+  local tmp="${destination}.tmp"
+  if ! curl -fLsS --retry 3 --retry-delay 2 --connect-timeout 10 \
+      "${REPO_URL}/${remote}" -o "$tmp"; then
+    rm -f "$tmp"
+    die "No se pudo descargar ${remote} desde GitHub."
+  fi
+  [[ -s "$tmp" ]] || { rm -f "$tmp"; die "El archivo ${remote} llegó vacío."; }
+  mv "$tmp" "$destination"
+}
 
-REPO_URL="https://raw.githubusercontent.com/kevinaldaircama/kenox/main"
+echo
+echo -e "${C_GREEN}Descargando menú y módulos desde GitHub...${C_NC}"
 
-# 1. Menú Principal y Dependencias de Raíz
-wget -qO /usr/local/bin/menu "$REPO_URL/menu.sh"
-wget -qO /etc/vps-manager/languages.sh "$REPO_URL/languages.sh"
-wget -qO /etc/vps-manager/version "$REPO_URL/version"
+download_file "menu.sh" "$MENU_PATH"
+download_file "languages.sh" "${INSTALL_DIR}/languages.sh"
+download_file "version" "${INSTALL_DIR}/version"
 
-# 2. Lista completa de archivos core
 CORE_FILES=(
-    "BHTTP.py" "Bbr.sh" "Slowdns.sh" "edit_ovpn_user.sh" "badvpn.sh" 
-    "banner.sh" "bhttp.sh" "bot.sh" "checkuser.sh" "domain.sh" 
-    "firewall.sh" "fix_ports.sh" "hcr-server" "hcr.sh" "hysteria.sh" 
-    "limiter.sh" "master.py" "php.sh" "ports.sh" "proxy.py" 
-    "setup_dns.sh" "setup_hysteria.sh" "setup_openvpn.sh" "setup_zivpn.sh" 
-    "specs.sh" "ssh.sh" "sshws.sh" "ssl.sh" "trojan.sh" 
-    "udp_custom.sh" "update.sh" "user.sh" "vless.sh" "vmess.sh" 
-    "webpanel.sh" "websocket.sh" "xray_manager.sh" "zivpn.sh"
+  "BHTTP.py" "Bbr.sh" "Slowdns.sh" "edit_ovpn_user.sh" "badvpn.sh"
+  "banner.sh" "bhttp.sh" "bot.sh" "checkuser.sh" "domain.sh"
+  "firewall.sh" "fix_ports.sh" "hcr-server" "hcr.sh" "hysteria.sh"
+  "limiter.sh" "master.py" "php.sh" "ports.sh" "proxy.py"
+  "setup_dns.sh" "setup_hysteria.sh" "setup_openvpn.sh" "setup_zivpn.sh"
+  "specs.sh" "ssh.sh" "sshws.sh" "ssl.sh" "trojan.sh"
+  "udp_custom.sh" "update.sh" "user.sh" "vless.sh" "vmess.sh"
+  "webpanel.sh" "websocket.sh" "xray_manager.sh" "zivpn.sh"
 )
 
 for file in "${CORE_FILES[@]}"; do
-    wget -qO /etc/vps-manager/core/$file "$REPO_URL/core/$file"
+  download_file "core/${file}" "${CORE_DIR}/${file}"
 done
 
-# Permisos y limpieza de errores
-chmod +x /usr/local/bin/menu
-chmod +x /etc/vps-manager/core/*.sh
-dos2unix /usr/local/bin/menu > /dev/null 2>&1
-dos2unix /etc/vps-manager/core/*.sh > /dev/null 2>&1
+chmod +x "$MENU_PATH"
+find "$CORE_DIR" -maxdepth 1 -type f -name '*.sh' -exec chmod +x {} +
+dos2unix "$MENU_PATH" "${INSTALL_DIR}/languages.sh" "${CORE_DIR}"/*.sh >/dev/null 2>&1 || true
 
-echo -e " - [ ${C_GREEN}✅${C_NC} ] MÓDULOS DE FUNCIONES INSTALADOS Y LIMPIOS"
+log "Menú y módulos descargados correctamente."
 
-# Autoinicio
-if ! grep -q "menu" /root/.bashrc; then
-    echo -e "\nclear\nmenu" >> /root/.bashrc
+# -------- AUTOINICIO DEL MENÚ --------
+BASHRC="/root/.bashrc"
+if ! grep -Fq '[[ -x /usr/local/bin/menu ]] && /usr/local/bin/menu' "$BASHRC" 2>/dev/null; then
+  cat >> "$BASHRC" <<'EOF'
+
+# KEVINTECH MENU - iniciar menú al entrar en una sesión interactiva
+if [[ $- == *i* ]] && [[ -x /usr/local/bin/menu ]] && [[ -z "${TMUX:-}" ]]; then
+  /usr/local/bin/menu
+fi
+EOF
 fi
 
-echo -e "${C_ORANGE}======================================================${C_NC}"
-echo -e "\n${C_GREEN}✅ INSTALACIÓN BASE COMPLETADA EXITOSAMENTE.${C_NC}"
-sleep 3
-reboot
+echo
+log "INSTALACIÓN BASE COMPLETADA."
+warn "No se reinició el VPS automáticamente. Reinicia manualmente cuando hayas comprobado que todo funciona: reboot"
+echo "Para abrir el menú ahora ejecuta: menu"
