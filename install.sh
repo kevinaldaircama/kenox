@@ -23,7 +23,7 @@ command -v apt-get >/dev/null 2>&1 || die "Este instalador requiere Ubuntu o Deb
 export DEBIAN_FRONTEND=noninteractive
 
 # -------- CONFIGURACIÓN --------
-BOT_API="https://api.kevintechtutorials.site/"
+BOT_API="https://api.kevintechtutorials.site"
 REPO_URL="https://raw.githubusercontent.com/kevinaldaircama/kenox/main"
 INSTALL_DIR="/etc/vps-manager"
 CORE_DIR="${INSTALL_DIR}/core"
