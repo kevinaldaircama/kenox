@@ -23,7 +23,7 @@ command -v apt-get >/dev/null 2>&1 || die "Este instalador requiere Ubuntu o Deb
 export DEBIAN_FRONTEND=noninteractive
 
 # -------- CONFIGURACIÓN --------
-BOT_API="https://api.kevintechtutorials.site"
+BOT_API="https://api.kevintechtutorials.site/"
 REPO_URL="https://raw.githubusercontent.com/kevinaldaircama/kenox/main"
 INSTALL_DIR="/etc/vps-manager"
 CORE_DIR="${INSTALL_DIR}/core"
@@ -45,22 +45,32 @@ VPS_IP="$(curl -4fsS --connect-timeout 8 --max-time 15 https://ipv4.icanhazip.co
 echo
 echo "Validando la key con la API: ${BOT_API}"
 
-# Se envían parámetros URL-encoded y se comprueba HTTP + respuesta.
-# Respuestas aceptadas:
-#   {"status":"valid"}  o  {"valid":true}
-# Respuestas como {"status":"invalid"} o {"valid":false} se rechazan.
-API_RESPONSE="$(curl -4fsS --connect-timeout 8 --max-time 20 \
-  --get "$BOT_API" \
-  --data-urlencode "key=${USER_KEY}" \
-  --data-urlencode "ip=${VPS_IP}")" \
-  || die "La API no respondió correctamente. Verifica DNS, SSL y que el servicio API esté activo."
+# IMPORTANTE:
+# Tu API del primer ZIP NO valida con GET /?key=...
+# Expone POST /api/public/validate y POST /api/public/activate.
+# La validación pública recibe JSON: {"key":"..."} y responde {"ok":true,...}
+API_RESPONSE_FILE="$(mktemp)"
+HTTP_CODE="$(curl -4sS --connect-timeout 8 --max-time 20 \
+  -X POST \
+  -H "Content-Type: application/json" \
+  --data "$(jq -n --arg key "$USER_KEY" '{key:$key}')" \
+  -o "$API_RESPONSE_FILE" -w "%{http_code}" \
+  "${BOT_API%/}/api/public/validate" || true)"
 
-if printf '%s' "$API_RESPONSE" | grep -Eiq '"status"[[:space:]]*:[[:space:]]*"valid"|"valid"[[:space:]]*:[[:space:]]*true'; then
-    log "Key aceptada. Continuando con la instalación."
-else
-    echo -e "${C_RED}Respuesta de la API:${C_NC} ${API_RESPONSE:0:500}"
-    die "KEY inválida, vencida, usada o no autorizada para esta IP."
+API_RESPONSE="$(cat "$API_RESPONSE_FILE" 2>/dev/null || true)"
+if [[ "$HTTP_CODE" != "200" ]] || ! printf '%s' "$API_RESPONSE" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+    ERROR="$(printf '%s' "$API_RESPONSE" | jq -r '.error // "api_error"' 2>/dev/null || echo "api_error")"
+    rm -f "$API_RESPONSE_FILE"
+    echo -e "${C_RED}HTTP ${HTTP_CODE:-sin respuesta}: ${ERROR}${C_NC}"
+    echo -e "Respuesta: ${API_RESPONSE:0:400}"
+    die "KEY inválida, usada, vencida o API no disponible."
 fi
+
+# Guardar datos devueltos por la API para registrar activación después.
+KEY_OWNER="$(printf '%s' "$API_RESPONSE" | jq -r '.owner // ""')"
+KEY_RESELLER="$(printf '%s' "$API_RESPONSE" | jq -r '.reseller // ""')"
+rm -f "$API_RESPONSE_FILE"
+log "Key aceptada. Registrando activación..."
 
 # -------- INFORMACIÓN DEL SISTEMA --------
 os_name="$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-Linux}")"
@@ -83,7 +93,7 @@ apt-get update
 PACKAGES=(
   ca-certificates curl wget sudo cron screen nginx nload htop
   python3 python3-pip nodejs npm lsof psmisc socat bc
-  netcat-openbsd net-tools dos2unix
+  netcat-openbsd net-tools dos2unix jq
 )
 apt-get install -y "${PACKAGES[@]}"
 log "Dependencias instaladas."
@@ -138,6 +148,30 @@ find "$CORE_DIR" -maxdepth 1 -type f -name '*.sh' -exec chmod +x {} +
 dos2unix "$MENU_PATH" "${INSTALL_DIR}/languages.sh" "${CORE_DIR}"/*.sh >/dev/null 2>&1 || true
 
 log "Menú y módulos descargados correctamente."
+
+# -------- REGISTRAR ACTIVACIÓN EN LA API --------
+ACTIVATION_JSON="$(jq -n \
+  --arg key "$USER_KEY" \
+  --arg ip "$VPS_IP" \
+  --arg hostname "$(hostname)" \
+  --arg os "$os_name" \
+  '{key:$key, ip:$ip, hostname:$hostname, os:$os, date:(now|todate)}')"
+ACTIVATION_FILE="$(mktemp)"
+ACTIVATION_CODE="$(curl -4sS --connect-timeout 8 --max-time 20 \
+  -X POST \
+  -H "Content-Type: application/json" \
+  --data "$ACTIVATION_JSON" \
+  -o "$ACTIVATION_FILE" -w "%{http_code}" \
+  "${BOT_API%/}/api/public/activate" || true)"
+ACTIVATION_RESPONSE="$(cat "$ACTIVATION_FILE" 2>/dev/null || true)"
+rm -f "$ACTIVATION_FILE"
+
+if [[ "$ACTIVATION_CODE" != "201" ]] || ! printf '%s' "$ACTIVATION_RESPONSE" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+  echo -e "${C_RED}No se pudo registrar la activación (HTTP ${ACTIVATION_CODE:-sin respuesta}).${C_NC}"
+  echo -e "Respuesta: ${ACTIVATION_RESPONSE:0:400}"
+  die "La instalación se detuvo para evitar dejar una KEY sin activación registrada."
+fi
+log "Activación registrada en la API."
 
 # -------- AUTOINICIO DEL MENÚ --------
 BASHRC="/root/.bashrc"
